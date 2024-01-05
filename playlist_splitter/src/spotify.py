@@ -1,15 +1,15 @@
 from utils import get_logger
 import csv
 import os
-
-# LOG_PATH = os.path.join
+from datetime import datetime
 
 
 class PlaylistSplitter:
     def __init__(self, src_playlist_id, genres):
+        self.log_file_path = f"playlist_splitter_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
         self.src_playlist_id = src_playlist_id
         self.genres = genres
-        self.logger = get_logger()
+        self.logger = get_logger(self.log_file_path)
 
     def get_playlist_tracks_genres(self):
         """ get the genres of all the tracks in a given playlist """
