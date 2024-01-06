@@ -50,7 +50,9 @@ class PlaylistSplitter:
         offset = 0
         limit = 100  # maximum limit per request
         num_of_processed_tracks = 0
+        already_prcessed_tracks = [f"{t['track_name']} - {t['artist_name']}" for t in self.tracks_data]
         self.logger.info(f"getting genres for playlist ID {self.playlist_id}...")
+
         while True:
             results = self.sp_client.playlist_items(self.playlist_id, offset=offset, limit=limit)
             tracks = results['items']
@@ -58,16 +60,20 @@ class PlaylistSplitter:
                 try:
                     artist_name = track['track']['artists'][0]['name']
                     track_name = track['track']['name']
-                    genres = self.__get_track_genres(artist_name, track_name)
-                    track_data = {
-                        "track_id": track['track']['id'],
-                        "genres": genres,
-                        "artist_name": artist_name,
-                        "track_name": track_name
-                    }
-                    self.tracks_data.append(track_data)
+                    if f"{track_name} - {artist_name}" not in already_prcessed_tracks:
+                        genres = self.__get_track_genres(artist_name, track_name)
+                        track_data = {
+                            "track_id": track['track']['id'],
+                            "genres": genres,
+                            "artist_name": artist_name,
+                            "track_name": track_name
+                        }
+                        self.tracks_data.append(track_data)
+                        self.logger.info(f"got genres for: {artist_name} - {track_name}")
+                    else:
+                        self.logger.info(f"already processed '{artist_name} - {track_name}', skipping..")
                     num_of_processed_tracks += 1
-                    self.logger.info(f"done with {num_of_processed_tracks} tracks, got genres for: {artist_name} - {track_name}")
+                    self.logger.info(f"done with {num_of_processed_tracks} tracks")
                 except Exception as e:
                     self.logger.error(f"FAILED fetching for: \ntrack: {track}\nerror: {e}")
                     self.failed_tracks.append(track)
@@ -103,14 +109,16 @@ class PlaylistSplitter:
         """ get a given track's genres. kind of LOL """
         return get_lastfm_track_tags(artist_name, track_name, self.logger)
 
-    def _save_tracks_from_genre_to_csv(self, genre: str) -> str:
+    def _save_tracks_from_genres_to_csv(self, genre: str) -> str:
         """ save tracks of the given genre from the playlist to a CSV """
         genre_csv_path = f"{genre}_{NOW}.csv"
         search_genre = genre.lower()
         num_of_songs_in_genre = 0
+
         with open(genre_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=GENRE_CSV_HEADERS)
             writer.writeheader()
+
             for track in self.tracks_data:
                 # save only tracks with partially/fully matching genres
                 track_genres = [element.lower() for element in track['genres']]
