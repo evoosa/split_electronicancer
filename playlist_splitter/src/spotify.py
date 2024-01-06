@@ -1,4 +1,4 @@
-from .utils import get_logger
+from .utils import get_logger, get_partial_str_matches_in_list
 from .lastfm import get_lastfm_track_tags
 import csv
 import os
@@ -12,13 +12,13 @@ from dotenv import load_dotenv
 # Load variables from the .env file
 load_dotenv()
 NOW = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+GENRE_CSV_HEADERS = ["track_id", "genres", "track_name", "artist_name"]
 
 
 class PlaylistSplitter:
-    def __init__(self, src_playlist_id, genres):
+    def __init__(self, src_playlist_id):
         # INPUTS
         self.playlist_id = src_playlist_id
-        self.genres = genres
 
         # FILES
         self.log_file_path = f"playlist_splitter_{NOW}.log"
@@ -26,7 +26,7 @@ class PlaylistSplitter:
 
         # STUFF
         self.logger = get_logger(self.log_file_path)
-        self.client = PlaylistSplitter._get_sp_client()
+        self.sp_client = PlaylistSplitter._get_sp_client()
         self.tracks_data = []
         self.failed_tracks = []
 
@@ -42,7 +42,7 @@ class PlaylistSplitter:
         offset = 0
         limit = 100  # Maximum limit per request
         while True:
-            results = self.client.playlist_items(self.playlist_id, offset=offset, limit=limit)
+            results = self.sp_client.playlist_items(self.playlist_id, offset=offset, limit=limit)
             tracks = results['items']
             for track in tracks:
                 try:
@@ -67,26 +67,43 @@ class PlaylistSplitter:
     def save_playlist_data_to_csv(self):
         """ save the playlist tracks data to a CSV file """
         with open(self.playlist_data_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=["track_id", "genres", "track_name", "artist_name"])
+            writer = csv.DictWriter(csvfile, fieldnames=GENRE_CSV_HEADERS)
             writer.writeheader()
-            for row in self.tracks_data:
-                writer.writerow(row)
+            for track in self.tracks_data:
+                writer.writerow(track)
         self.logger.info(f"saved CSV to: {self.playlist_data_file_path}")
 
-    def load_playlist_data_from_csv(self, csv_file_path):
+    def load_playlist_data_from_csv(self, csv_file_path: str):
         """ load the playlist tracks data form a previously saved CSV """
         data = []
         with open(csv_file_path, 'r', newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
-            for row in reader:
-                row['genres'] = ast.literal_eval(row['genres'])
-                data.append(row)
+            for track in reader:
+                track['genres'] = ast.literal_eval(track['genres'])
+                data.append(track)
         self.tracks_data = data
         self.logger.info(f"loaded {len(data)} tracks!")
 
     def _get_track_genres(self, artist_name: str, track_name: str):
+        """ get a given track's genres. kind of LOL """
         return get_lastfm_track_tags(artist_name, track_name, self.logger)
 
-    def create_playlist_from_genre(self, genre):
-        """ create a playlist with tracks of the given genre from the src playlist """
+    def save_tracks_from_genre_to_csv(self, genre: str):
+        """ save tracks of the given genre from the playlist to a CSV """
+        genre_csv_path = f"{genre}_{NOW}.csv"
+        search_genre = genre.lower()
+        with open(genre_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=GENRE_CSV_HEADERS)
+            writer.writeheader()
+            for track in self.tracks_data:
+                # save only tracks with partially/fully matching genres
+                track_genres = [element.lower() for element in track['genres']]
+                matching_genres = get_partial_str_matches_in_list(track_genres, search_genre)
+                if matching_genres:
+                    track['genres'] = matching_genres
+                    writer.writerow(track)
+        self.logger.info(f"saved CSV to: {genre_csv_path}")
+
+    def create_playlist_from_csv(self, genre, csv_file_path):
+        """ create a playlist with tracks from a given CSV """
         pass
