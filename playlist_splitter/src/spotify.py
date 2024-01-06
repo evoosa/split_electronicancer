@@ -1,8 +1,9 @@
-from .utils import get_logger, save_to_csv
+from .utils import get_logger
 from .lastfm import get_lastfm_track_tags
 import csv
 import os
 from datetime import datetime
+import ast
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -71,6 +72,17 @@ class PlaylistSplitter:
             for row in self.tracks_data:
                 writer.writerow(row)
         self.logger.info(f"saved CSV to: {self.playlist_data_file_path}")
+
+    def load_playlist_data_from_csv(self, csv_file_path):
+        """ load the playlist tracks data form a previously saved CSV """
+        data = []
+        with open(csv_file_path, 'r', newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                row['genres'] = ast.literal_eval(row['genres'])
+                data.append(row)
+        self.tracks_data = data
+        self.logger.info(f"loaded {len(data)} tracks!")
 
     def _get_track_genres(self, artist_name: str, track_name: str):
         return get_lastfm_track_tags(artist_name, track_name, self.logger)
