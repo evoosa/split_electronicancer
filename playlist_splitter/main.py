@@ -7,4 +7,4 @@ if __name__ == '__main__':
 
     ps = PlaylistSplitter(ELECTRONICANCER_ID)  # initiate
     ps.get_playlist_tracks_genres()  # get the track/genres mapping
-    ps.create_playlist_of_genre(PLAYLIST_NAME, GENRE)
+    ps.create_playlist_of_genre(GENRE, PLAYLIST_NAME)

@@ -101,6 +101,7 @@ class PlaylistSplitter:
             reader = csv.DictReader(csvfile)
             for track in reader:
                 track['genres'] = ast.literal_eval(track['genres'])
+                print(track['genres'])
                 data.append(track)
         self.tracks_data = data
         self.logger.info(f"loaded {len(data)} tracks!")
@@ -109,12 +110,11 @@ class PlaylistSplitter:
         """ get a given track's genres. kind of LOL """
         return get_lastfm_track_tags(artist_name, track_name, self.logger)
 
-    def _save_tracks_from_genres_to_csv(self, genre: str) -> str:
+    def _save_tracks_from_genre_to_csv(self, genre: str) -> str:
         """ save tracks of the given genre from the playlist to a CSV """
         genre_csv_path = f"{genre}_{NOW}.csv"
         search_genre = genre.lower()
         num_of_songs_in_genre = 0
-
         with open(genre_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=GENRE_CSV_HEADERS)
             writer.writeheader()
@@ -130,30 +130,61 @@ class PlaylistSplitter:
         self.logger.info(f"saved {num_of_songs_in_genre} tracks to CSV to: {genre_csv_path}")
         return genre_csv_path
 
-    def _create_playlist_from_csv(self, csv_file_path, playlist_name, public=True):
-        """ create a playlist with tracks from a given CSV """
+    def _create_playlist(self, playlist_name):
+        """ create a playlist, return its ID """
         playlist = self.sp_client.user_playlist_create(
             user=self.spotify_username,
             name=playlist_name,
-            public=True if public == True else False,
+            public=True,
         )
-        self.logger.info(f"created plalyist '{playlist_name}'")
+        self.logger.info(f"created playist '{playlist_name}'")
+        return playlist['id']
 
+    def __get_existing_track_ids_in_playlist(self, playlist_id):
+        offset = 0
+        limit = 100  # maximum limit per request
+        self.logger.info(f"getting track IDs from playlist ID {playlist_id}...")
         track_ids = []
+        while True:
+            results = self.sp_client.playlist_items(playlist_id, offset=offset, limit=limit)
+            tracks = results['items']
+            track_ids.extend([track['track']['id'] for track in tracks])
+            if not tracks:
+                break  # No more tracks
+            offset += limit
+        self.logger.info(f"done! got IDs of {offset} tracks")
+        return track_ids
+
+    def _add_tracks_from_csv_to_playlist(self, csv_file_path, playlist_id):
+        """ create a playlist with tracks from a given CSV """
+        tracks_num = 0
+        existing_track_ids = self.__get_existing_track_ids_in_playlist(playlist_id)
         with open(csv_file_path, 'r', newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for track in reader:
-                track_id = track.get('track_id')
-                if track_id:
-                    track_ids.append(track_id)
+                track_id = track['track_id']
+                if track_id not in existing_track_ids:
+                    self.sp_client.playlist_add_items(
+                        playlist_id=playlist_id,
+                        items=[track_id]
+                    )
+                    self.logger.info(f"added '{track_id}' to playlist")
+                else:
+                    self.logger.info(f"track with ID '{track_id}' already exists in playlist, skipping..")
+                tracks_num += 1
+                self.logger.info(f"done with {tracks_num} tracks")
+        self.logger.info(f"added {tracks_num} songs to playlist with id '{playlist_id}'")
 
-        self.sp_client.playlist_add_items(
-            playlist_id=playlist['id'],
-            items=track_ids
-        )
-        self.logger.info(f"added {len(track_ids)} songs to '{playlist_name}'")
+    def create_playlist_of_genre(self, genre, playlist_name='', playlist_id=''):
+        """ create a playlist with tracks from a given genre, or add them to an existing playlist """
 
-    def create_playlist_of_genre(self, playlist_name, genre, public=True):
-        """ create a playlist with tracks from a given genre """
-        genre_csv_path = self._save_tracks_from_genre_to_csv(genre)  # save genre's track to a CSV
-        self._create_playlist_from_csv(genre_csv_path, playlist_name, public)  # create the playlist
+        if not playlist_id and playlist_name:
+            playlist_id = self._create_playlist(playlist_name)
+        elif not playlist_name and playlist_id:
+            self.logger(f"adding songs to and existing playlist with ID: '{playlist_id}'")
+        else:
+            raise ValueError("supply one of playlist_id or playlist_name!")
+
+        genre_csv_path = self._save_tracks_from_genre_to_csv(genre)
+        self._add_tracks_from_csv_to_playlist(genre_csv_path, playlist_id)
+        self.logger.info(f"created playlist '{playlist_name}' with ID: '{playlist_id}'")
