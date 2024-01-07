@@ -1,5 +1,5 @@
-from .utils import get_logger, get_partial_str_matches_in_list
-from .lastfm import get_lastfm_track_tags
+from utils import get_logger, get_partial_str_matches_in_list
+from lastfm import get_lastfm_track_tags
 import csv
 import os
 from datetime import datetime
@@ -12,26 +12,21 @@ from dotenv import load_dotenv
 NOW = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 GENRE_CSV_HEADERS = ["track_id", "genres", "track_name", "artist_name"]
 REDIRECT_URI = 'http://localhost:8888/callback/'
-SCOPE = 'playlist-modify-public playlist-modify-private'
+SPOTIFY_AUTH_SCOPE = 'playlist-modify-public playlist-modify-private'
 
 
 class PlaylistSplitter:
-    def __init__(self, src_playlist_id):
+    def __init__(self):
         # Load variables from the .env file
         load_dotenv()
 
-        # INPUTS
-        self.playlist_id = src_playlist_id
-
         # FILES
         self.log_file_path = f"playlist_splitter_{NOW}.log"
-        self.playlist_data_file_path = f"playlist_splitter_{NOW}.csv"
 
         # STUFF
-        self.spotify_username = os.getenv("SPOTIPY_USERNAME")
         self.logger = get_logger(self.log_file_path)
         self.sp_client = self._get_sp_client()
-        self.tracks_data = []
+        self.tracks = []
         self.failed_tracks = []
 
     def _get_sp_client(self):
@@ -40,21 +35,57 @@ class PlaylistSplitter:
             client_id=os.getenv("SPOTIPY_CLIENT_ID"),
             client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
             redirect_uri=REDIRECT_URI,
-            scope=SCOPE
+            scope=SPOTIFY_AUTH_SCOPE
         ))
         self.logger.info("authenticated with spotify")
         return sp_client
 
-    def get_playlist_tracks_genres(self):
-        """ get the genres of all the tracks in a given playlist """
+    # USABLE-LEVEL FUNCTIONS
+    def analyze_playlist(self, playlist_id: str):
+        """ get and save a playlist's genres to CSV """
+        self._get_all_tracks_genres(playlist_id)
+        tracks_file_path = self._save_tracks_to_csv(playlist_id)
+        return tracks_file_path
+
+    def create_playlist_of_genre(self, genre, playlist_name='', playlist_id='') -> str:
+        """ create a playlist with tracks from a given genre, or add them to an existing playlist """
+
+        if not playlist_id and playlist_name:
+            playlist_id = self.__create_playlist(playlist_name)
+        elif not playlist_name and playlist_id:
+            self.logger(f"adding songs to and existing playlist with ID: '{playlist_id}'")
+        else:
+            raise ValueError("supply one of playlist_id or playlist_name!")
+
+        genre_csv_path = self._save_genre_tracks_to_csv(genre)
+        self._add_tracks_from_csv_to_playlist(genre_csv_path, playlist_id)
+        self.logger.info(f"created playlist '{playlist_name}' with ID: '{playlist_id}'")
+        self.logger.info(f"genre's tracks are saved here: '{genre_csv_path}'")
+
+        return genre_csv_path
+
+    def load_tracks_from_csv(self, csv_file_path: str):
+        """ load the playlist tracks from a previously saved CSV """
+        data = []
+        with open(csv_file_path, 'r', newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for track in reader:
+                track['genres'] = ast.literal_eval(track['genres'])
+                print(track['genres'])
+                data.append(track)
+        self.tracks = data
+        self.logger.info(f"loaded {len(data)} tracks!")
+
+    # LOW-LEVEL functions
+    def _get_all_tracks_genres(self, playlist_id: str):
+        """ save the genres of all the tracks in the playlist """
         offset = 0
         limit = 100  # maximum limit per request
         num_of_processed_tracks = 0
-        already_prcessed_tracks = [f"{t['track_name']} - {t['artist_name']}" for t in self.tracks_data]
-        self.logger.info(f"getting genres for playlist ID {self.playlist_id}...")
-
+        already_prcessed_tracks = [f"{t['track_name']} - {t['artist_name']}" for t in self.tracks]
+        self.logger.info(f"getting genres for playlist ID {playlist_id}...")
         while True:
-            results = self.sp_client.playlist_items(self.playlist_id, offset=offset, limit=limit)
+            results = self.sp_client.playlist_items(playlist_id, offset=offset, limit=limit)
             tracks = results['items']
             for track in tracks:
                 try:
@@ -68,12 +99,12 @@ class PlaylistSplitter:
                             "artist_name": artist_name,
                             "track_name": track_name
                         }
-                        self.tracks_data.append(track_data)
-                        self.logger.info(f"got genres for: {artist_name} - {track_name}")
+                        self.tracks.append(track_data)
+                        self.logger.debug(f"got genres for: {artist_name} - {track_name}")
                     else:
-                        self.logger.info(f"already processed '{artist_name} - {track_name}', skipping..")
+                        self.logger.debug(f"already processed '{artist_name} - {track_name}', skipping..")
                     num_of_processed_tracks += 1
-                    self.logger.info(f"done with {num_of_processed_tracks} tracks")
+                    self.logger.debug(f"done with {num_of_processed_tracks} tracks")
                 except Exception as e:
                     self.logger.error(f"FAILED fetching for: \ntrack: {track}\nerror: {e}")
                     self.failed_tracks.append(track)
@@ -83,44 +114,19 @@ class PlaylistSplitter:
             offset += limit
             self.logger.info(f"processed {offset} tracks...")
         self.logger.info(f"done! processed a total of {offset} tracks")
-        self.__save_playlist_data_to_csv()
 
-    def __save_playlist_data_to_csv(self):
-        """ save the playlist tracks data to a CSV file """
-        with open(self.playlist_data_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=GENRE_CSV_HEADERS)
-            writer.writeheader()
-            for track in self.tracks_data:
-                writer.writerow(track)
-        self.logger.info(f"saved CSV to: {self.playlist_data_file_path}")
-
-    def load_playlist_data_from_csv(self, csv_file_path: str):
-        """ load the playlist tracks data form a previously saved CSV """
-        data = []
-        with open(csv_file_path, 'r', newline='', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for track in reader:
-                track['genres'] = ast.literal_eval(track['genres'])
-                print(track['genres'])
-                data.append(track)
-        self.tracks_data = data
-        self.logger.info(f"loaded {len(data)} tracks!")
-
-    def __get_track_genres(self, artist_name: str, track_name: str):
-        """ get a given track's genres. kind of LOL """
-        return get_lastfm_track_tags(artist_name, track_name, self.logger)
-
-    def _save_tracks_from_genre_to_csv(self, genre: str) -> str:
+    def _save_genre_tracks_to_csv(self, genre: str) -> str:
         """ save tracks of the given genre from the playlist to a CSV """
         genre_csv_path = f"{genre}_{NOW}.csv"
         search_genre = genre.lower()
         num_of_songs_in_genre = 0
+
         with open(genre_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=GENRE_CSV_HEADERS)
             writer.writeheader()
 
-            for track in self.tracks_data:
-                # save only tracks with partially/fully matching genres
+            # save only tracks with partially/fully matching genres
+            for track in self.tracks:
                 track_genres = [element.lower() for element in track['genres']]
                 matching_genres = get_partial_str_matches_in_list(track_genres, search_genre)
                 if matching_genres:
@@ -129,31 +135,6 @@ class PlaylistSplitter:
                     num_of_songs_in_genre += 1
         self.logger.info(f"saved {num_of_songs_in_genre} tracks to CSV to: {genre_csv_path}")
         return genre_csv_path
-
-    def _create_playlist(self, playlist_name):
-        """ create a playlist, return its ID """
-        playlist = self.sp_client.user_playlist_create(
-            user=self.spotify_username,
-            name=playlist_name,
-            public=True,
-        )
-        self.logger.info(f"created playist '{playlist_name}'")
-        return playlist['id']
-
-    def __get_existing_track_ids_in_playlist(self, playlist_id):
-        offset = 0
-        limit = 100  # maximum limit per request
-        self.logger.info(f"getting track IDs from playlist ID {playlist_id}...")
-        track_ids = []
-        while True:
-            results = self.sp_client.playlist_items(playlist_id, offset=offset, limit=limit)
-            tracks = results['items']
-            track_ids.extend([track['track']['id'] for track in tracks])
-            if not tracks:
-                break  # No more tracks
-            offset += limit
-        self.logger.info(f"done! got IDs of {offset} tracks")
-        return track_ids
 
     def _add_tracks_from_csv_to_playlist(self, csv_file_path, playlist_id):
         """ create a playlist with tracks from a given CSV """
@@ -175,16 +156,44 @@ class PlaylistSplitter:
                 self.logger.info(f"done with {tracks_num} tracks")
         self.logger.info(f"added {tracks_num} songs to playlist with id '{playlist_id}'")
 
-    def create_playlist_of_genre(self, genre, playlist_name='', playlist_id=''):
-        """ create a playlist with tracks from a given genre, or add them to an existing playlist """
+    def _save_tracks_to_csv(self, playlist_id):
+        """ save the tracks to a CSV file """
+        tracks_file_path = f"{playlist_id}_genres_{NOW}.csv"
+        with open(tracks_file_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=GENRE_CSV_HEADERS)
+            writer.writeheader()
+            for track in self.tracks:
+                writer.writerow(track)
+        self.logger.info(f"saved tracks to: {tracks_file_path}")
+        return tracks_file_path
 
-        if not playlist_id and playlist_name:
-            playlist_id = self._create_playlist(playlist_name)
-        elif not playlist_name and playlist_id:
-            self.logger(f"adding songs to and existing playlist with ID: '{playlist_id}'")
-        else:
-            raise ValueError("supply one of playlist_id or playlist_name!")
+    # PASTEN-LEVEL FUNCTIONS
+    def __get_track_genres(self, artist_name: str, track_name: str):
+        """ get a given track's genres. kind of LOL """
+        return get_lastfm_track_tags(artist_name, track_name, self.logger)
 
-        genre_csv_path = self._save_tracks_from_genre_to_csv(genre)
-        self._add_tracks_from_csv_to_playlist(genre_csv_path, playlist_id)
-        self.logger.info(f"created playlist '{playlist_name}' with ID: '{playlist_id}'")
+    def __create_playlist(self, playlist_name):
+        """ create a playlist, return its ID """
+        playlist = self.sp_client.user_playlist_create(
+            user=os.getenv("SPOTIPY_USERNAME"),
+            name=playlist_name,
+            public=True,
+        )
+        self.logger.info(f"created playlist '{playlist_name}'")
+        return playlist['id']
+
+    def __get_existing_track_ids_in_playlist(self, playlist_id):
+        """ get existing track IDs in a playlist """
+        offset = 0
+        limit = 100  # maximum limit per request
+        self.logger.info(f"getting track IDs from playlist ID {playlist_id}...")
+        track_ids = []
+        while True:
+            results = self.sp_client.playlist_items(playlist_id, offset=offset, limit=limit)
+            tracks = results['items']
+            track_ids.extend([track['track']['id'] for track in tracks])
+            if not tracks:
+                break  # No more tracks
+            offset += limit
+        self.logger.info(f"done! got IDs of {offset} tracks")
+        return track_ids

@@ -9,7 +9,7 @@ def get_partial_str_matches_in_list(lst, search_string):
 
 def get_logger(log_file_path):
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # create a formatter
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
